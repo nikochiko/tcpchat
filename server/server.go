@@ -2,8 +2,10 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -20,8 +22,6 @@ const (
 	NewConversationHeader    = "new"
 )
 
-var EOFBytes = []byte("\r\n")
-
 var conversationIDs = map[uuid.UUID]bool{}
 
 // Listen starts listening on the given service ("host:port") for TCP connections
@@ -31,6 +31,8 @@ func Listen(service string) error {
 
 	listener, err := net.ListenTCP("tcp", laddr)
 	common.CheckError(err)
+
+	fmt.Printf("Started listening on %s\n", laddr)
 
 	// start listening indefinitely
 	for {
@@ -84,8 +86,8 @@ func handleConnection(conn net.Conn) {
 		switch operation.Type {
 		case common.CreateOperationType:
 			response, err = handleCreateConversation(operation)
-		// case common.SubscribeOperationType:
-		// 	response, err = handleSubscribeToConversation(operation)
+			// case common.SubscribeOperationType:
+			// 	response, err = handleSubscribeToConversation(operation)
 		}
 
 		err = writeOKResponse(conn, response)
@@ -99,19 +101,26 @@ func handleConnection(conn net.Conn) {
 }
 
 func handleCreateConversation(op *common.Operation) (*json.RawMessage, error) {
-	response := &json.RawMessage{}
-	conversation := &common.Conversation{}
+	message := json.RawMessage("{}")
+	conversation := &common.Conversation{ID: uuid.New()}
 
 	err := json.Unmarshal(*op.Message, conversation)
 	if err != nil {
 		log.Printf("Unmarshaling error while parsing Conversation: %s\n", err.Error())
-		return response, errors.New(UnmarshalingError)
+		return &message, errors.New(UnmarshalingError)
 	}
 
 	conversationIDs[conversation.ID] = true
 
-	// empty response is fine here, nothing to give to client
-	return response, nil
+	b, err := json.Marshal(conversation)
+	if err != nil {
+		log.Printf("Marshaling error while creating Conversation{} for returning back: %s\n", err.Error())
+		return &message, errors.New("Something went wrong")
+	}
+
+	message = json.RawMessage(b)
+
+	return &message, nil
 }
 
 // ParseClientAboutMe parses the data first sent by Client to introduce themselves
@@ -143,29 +152,38 @@ func writeErrorResponse(conn net.Conn, s string) {
 	defer conn.Close()
 
 	errorMessage := common.Error{Message: s}
-	response := common.Response{Status: "error", Error: &errorMessage}
+	response := common.NewResponse()
+	response.Status = "error"
+	response.Error = &errorMessage
+
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
 		log.Printf("Got another error while writing one error: %s", err.Error())
 	}
 
 	conn.Write(responseBytes)
-	conn.Write(EOFBytes)
+	conn.Write(common.EOFBytes)
 	conn.Close()
 }
 
 func writeOKResponse(conn net.Conn, message *json.RawMessage) error {
-	response := common.Response{Status: "ok", Message: message}
+	response := common.NewResponse()
+	response.Status = "ok"
+	if !bytes.Equal(*message, []byte{}) {
+		response.Message = message
+	}
+
+	log.Printf("Message: %s\n", string(*message))
 
 	responseBytes, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("Got an error while marshaling an OK response")
+		log.Printf("Got an error while marshaling an OK response: %s", err.Error())
 		err := errors.New("Something went wrong")
 		return err
 	}
 
 	conn.Write(responseBytes)
-	conn.Write(EOFBytes)
+	conn.Write(common.EOFBytes)
 
 	return nil
 }

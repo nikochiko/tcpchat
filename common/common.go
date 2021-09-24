@@ -12,6 +12,8 @@ const (
 	SubscribeOperationType = "subscribe"
 )
 
+var EOFBytes = []byte("\r\n")
+
 // Message type describes a message being transferred between a client and a server
 type Message struct {
 	ConversationID uuid.UUID
@@ -27,8 +29,7 @@ type Sender struct {
 
 // Conversation type is where senders can send and viewers can view the messages
 type Conversation struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedBy *Sender   `json:"created_by"`
+	ID uuid.UUID `json:"id"`
 }
 
 // Error type is used to send errors
@@ -49,6 +50,24 @@ type Response struct {
 	Status  string           `json:"status"`
 	Error   *Error           `json:"error"`
 	Message *json.RawMessage `json:"message"`
+}
+
+func NewOperation() Operation {
+	emptyJSON := json.RawMessage("{}")
+	operation := Operation{
+		Message: &emptyJSON,
+	}
+
+	return operation
+}
+
+func NewResponse() Response {
+	emptyJSON := json.RawMessage("{}")
+	response := Response{
+		Message: &emptyJSON,
+	}
+
+	return response
 }
 
 // CheckError checks that err is not nil, and exits after a log if it isn't
