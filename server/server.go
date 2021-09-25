@@ -23,6 +23,8 @@ var conversationIDs = map[uuid.UUID]bool{}
 var conversations = []*common.Conversation{}
 var conversationsByNickname = map[string]*common.Conversation{}
 
+var messagesChannel = make(chan common.Message)
+
 // Listen starts listening on the given service ("host:port") for TCP connections
 func Listen(service string) error {
 	laddr, err := net.ResolveTCPAddr("tcp4", service)
@@ -66,6 +68,12 @@ func handleConnection(conn net.Conn) {
 
 	conversationsToListenOn := map[uuid.UUID]bool{}
 
+	quit := make(chan bool)
+	go subscribeToMessages(conn, conversationsToListenOn, quit)
+	defer func() {
+		quit <- true
+	}()
+
 	for {
 		nBytes, err := bufio.NewReader(conn).Read(buf)
 
@@ -80,13 +88,16 @@ func handleConnection(conn net.Conn) {
 			break
 		}
 
-		var response *json.RawMessage
+		emptyJSON := json.RawMessage("{}")
+		var response = &emptyJSON
 
 		switch operation.Type {
 		case common.CreateOperationType:
-			response, err = handleCreateConversation(operation)
+			err = handleCreateConversation(operation)
 		case common.SubscribeOperationType:
-			response, err = handleSubscribe(operation, conversationsToListenOn)
+			err = handleSubscribe(operation, conversationsToListenOn)
+		case common.MessageOperationType:
+			response, err = handleMessage(operation)
 		}
 
 		if err != nil {
@@ -105,14 +116,35 @@ func handleConnection(conn net.Conn) {
 	return
 }
 
-func handleCreateConversation(op *common.Operation) (*json.RawMessage, error) {
-	message := json.RawMessage("{}")
+func subscribeToMessages(conn net.Conn, conversationsToListenOn map[uuid.UUID]bool, quit chan bool) {
+	for {
+		select {
+		case <-quit:
+			return
+		case message := <-messagesChannel:
+			if conversationsToListenOn[message.ConversationID] {
+				responseBytes, err := json.Marshal(message)
+				if err != nil {
+					log.Printf("error while marshaling message: %s\n", err.Error())
+
+					// let's continue listening for other messages
+					continue
+				}
+
+				responseJSON := json.RawMessage(responseBytes)
+				writeOKResponse(conn, &responseJSON)
+			}
+		}
+	}
+}
+
+func handleCreateConversation(op *common.Operation) error {
 	conversation := &common.Conversation{}
 
 	err := json.Unmarshal(*op.Message, conversation)
 	if err != nil {
 		log.Printf("Unmarshaling error while parsing Conversation: %s\n", err.Error())
-		return &message, errors.New(unmarshalingError)
+		return errors.New(unmarshalingError)
 	}
 
 	conversation.ID = uuid.New()
@@ -123,45 +155,51 @@ func handleCreateConversation(op *common.Operation) (*json.RawMessage, error) {
 
 	if _, ok := conversationsByNickname[conversation.Nickname]; ok {
 		err := fmt.Sprintf("conversation with nickname '%s' already exists", conversation.Nickname)
-		return &message, errors.New(err)
+		return errors.New(err)
 	}
 
 	conversations = append(conversations, conversation)
 	conversationIDs[conversation.ID] = true
 	conversationsByNickname[conversation.Nickname] = conversation
 
-	b, err := json.Marshal(conversation)
-	if err != nil {
-		log.Printf("Marshaling error while creating Conversation{} for returning back: %s\n", err.Error())
-		return &message, errors.New("Something went wrong")
-	}
-
-	message = json.RawMessage(b)
-
-	return &message, nil
+	return nil
 }
 
-func handleSubscribe(op *common.Operation, conversationsToListenOn map[uuid.UUID]bool) (*json.RawMessage, error) {
-	message := json.RawMessage("{}")
+func handleSubscribe(op *common.Operation, conversationsToListenOn map[uuid.UUID]bool) error {
 	inputConversation := &common.Conversation{}
 
 	err := json.Unmarshal(*op.Message, inputConversation)
 	if err != nil {
 		log.Printf("Unmarshaling error while parsing Conversation: %s\n", err.Error())
-		return &message, errors.New(unmarshalingError)
+		return errors.New(unmarshalingError)
 	}
 
 	nickname := inputConversation.Nickname
 	conversation, ok := conversationsByNickname[nickname]
 	if !ok {
 		err := fmt.Sprintf("conversation '%s' does not exist", nickname)
-		return &message, errors.New(err)
+		return errors.New(err)
 	}
 
 	convID := conversation.ID
 	conversationsToListenOn[convID] = true
 
-	message = json.RawMessage(fmt.Sprintf("listening on conversation '%s'", nickname))
+	return nil
+}
+
+func handleMessage(op *common.Operation) (*json.RawMessage, error) {
+	message := json.RawMessage("{}")
+	convMessage := common.Message{}
+
+	err := json.Unmarshal(*op.Message, &convMessage)
+	if err != nil {
+		log.Printf("Unmarshaling error while parsing Message: %s\n", err.Error())
+		return &message, errors.New(unmarshalingError)
+	}
+
+	log.Printf("Got message: %s\n", convMessage)
+
+	messagesChannel <- convMessage
 
 	return &message, nil
 }

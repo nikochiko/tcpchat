@@ -10,6 +10,7 @@ import (
 const (
 	CreateOperationType    = "create"
 	SubscribeOperationType = "subscribe"
+	MessageOperationType   = "message"
 )
 
 var EOFBytes = []byte("\r\n")
