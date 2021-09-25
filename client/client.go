@@ -16,6 +16,7 @@ import (
 )
 
 var globalConversations = []*common.Conversation{}
+var clientInfo = common.ClientAboutMe{}
 
 func Connect(service string) {
 	raddr, err := net.ResolveTCPAddr("tcp4", service)
@@ -49,7 +50,8 @@ func handleConnection(conn net.Conn, quitConn chan bool) {
 	name := getClientName()
 
 	aboutClient := initialiseSender(name)
-	writeJSONTo(conn, aboutClient)
+	err = sendAboutClient(conn, *aboutClient)
+	common.CheckError(err)
 
 	quit := make(chan bool)
 	go handleIncoming(conn, quit)
@@ -122,8 +124,15 @@ func handleResponse(response common.Response) {
 		handleListOperationResponse(response.Message)
 	case common.MessageOperationType:
 		handleMessageOperationResponse(response.Message)
+	case common.AboutMeOperationType:
+		handleAboutMeOperationResponse(response.Message)
 		// ignore in all other cases
 	}
+}
+
+func handleAboutMeOperationResponse(aboutMeResponse *json.RawMessage) {
+	err := json.Unmarshal(*aboutMeResponse, &clientInfo)
+	common.CheckError(err)
 }
 
 func handleListOperationResponse(jsonConversations *json.RawMessage) {
@@ -137,7 +146,7 @@ func handleMessageOperationResponse(jsonMessage *json.RawMessage) {
 	err := json.Unmarshal(*jsonMessage, &message)
 	common.CheckError(err)
 
-	fmt.Printf("\n<@%s>: %s\n", message.Sender.Name, message.Text)
+	fmt.Printf("\n\033[1m<@%s>\033[0m: %s\n", message.Sender.Name, message.Text)
 }
 
 func listConversations(conn net.Conn) error {
@@ -201,6 +210,27 @@ func subscribe(conn net.Conn, convNickname string) error {
 	return nil
 }
 
+func sendAboutClient(conn net.Conn, aboutMe common.ClientAboutMe) error {
+	b, err := json.Marshal(aboutMe)
+	if err != nil {
+		return err
+	}
+
+	jsonAboutMe := json.RawMessage(b)
+
+	operation := common.Operation{
+		Type:    common.AboutMeOperationType,
+		Message: &jsonAboutMe,
+	}
+
+	err = writeJSONTo(conn, operation)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func sendMessage(conn net.Conn, convNickname string) error {
 	var text string
 	_, err := fmt.Scanf("%s\r", &text)
@@ -208,14 +238,46 @@ func sendMessage(conn net.Conn, convNickname string) error {
 		return err
 	}
 
-	fmt.Println(text)
-	// message := common.Message{
-	// 	ConversationNickname: convNickname,
-	// 	SenderName:           senderName,
-	// 	Text:                 text,
-	// }
+	conversation, err := getConversationByNickname(convNickname)
+	sender := common.Sender(clientInfo)
+
+	message := common.Message{
+		Text:         text,
+		Conversation: conversation,
+		Sender:       &sender,
+	}
+	b, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("Marhsaling error: %s\n", err.Error())
+		return errors.New("marshaling error")
+	}
+
+	jsonMessage := json.RawMessage(b)
+
+	operation := common.Operation{
+		Type:    common.MessageOperationType,
+		Message: &jsonMessage,
+	}
+
+	err = writeJSONTo(conn, operation)
+	if err != nil {
+		return err
+	}
 
 	return nil
+}
+
+func getConversationByNickname(nickname string) (*common.Conversation, error) {
+	for _, conversation := range globalConversations {
+		if strings.ToLower(conversation.Nickname) == strings.ToLower(nickname) {
+			return conversation, nil
+		}
+	}
+
+	emptyConversation := common.Conversation{}
+	err := fmt.Sprintf("conversation with nickname %s not found", nickname)
+
+	return &emptyConversation, errors.New(err)
 }
 
 func initialiseSender(name string) *common.ClientAboutMe {
@@ -251,6 +313,8 @@ func writeJSONTo(conn net.Conn, v interface{}) error {
 	if err != nil {
 		return err
 	}
+
+	conn.Write(common.EOFBytes)
 
 	return nil
 }

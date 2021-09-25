@@ -1,6 +1,7 @@
 package common
 
 import (
+	"bytes"
 	"encoding/json"
 	"log"
 
@@ -8,6 +9,7 @@ import (
 )
 
 const (
+	AboutMeOperationType   = "aboutme"
 	CreateOperationType    = "create"
 	SubscribeOperationType = "subscribe"
 	MessageOperationType   = "message"
@@ -18,9 +20,9 @@ var EOFBytes = []byte("\r\n")
 
 // Message type describes a message being transferred between a client and a server
 type Message struct {
-	Conversation Conversation `json:"conversation"`
-	Sender       Sender       `json:"sender"`
-	Text         string       `json:"text"`
+	Conversation *Conversation `json:"conversation"`
+	Sender       *Sender       `json:"sender"`
+	Text         string        `json:"text"`
 }
 
 // Sender type describes a sender of a message
@@ -88,6 +90,32 @@ func CheckErrorAndLog(err error) (isNotNil bool) {
 	if err != nil {
 		log.Printf("Error: %s\n", err.Error())
 		isNotNil = true
+	}
+
+	return
+}
+
+type reader interface {
+	ReadBytes(delim byte) ([]byte, error)
+}
+
+func ReadUntil(r reader, delim []byte) (returnBytes []byte, err error) {
+	lastChar := delim[len(delim)-1]
+
+	for {
+		b, err := r.ReadBytes(lastChar)
+		if err != nil {
+			break
+		}
+
+		returnBytes = append(returnBytes, b...)
+
+		if len(returnBytes) > len(delim) {
+			bSuffix := returnBytes[len(returnBytes)-len(delim):]
+			if bytes.Equal(delim, bSuffix) {
+				break
+			}
+		}
 	}
 
 	return

@@ -50,15 +50,26 @@ func Listen(service string) error {
 }
 
 func handleConnection(conn net.Conn) {
-	buf := make([]byte, 512)
-
-	nBytes, err := bufio.NewReader(conn).Read(buf)
+	connReader := bufio.NewReader(conn)
+	request, err := common.ReadUntil(connReader, common.EOFBytes)
 	if common.CheckErrorAndLog(err) {
 		writeErrorResponse(conn, "Some error occurred")
 		return
 	}
 
-	aboutClient, err := ParseClientAboutMe(buf[:nBytes])
+	operation, err := getOperation(request)
+	if common.CheckErrorAndLog(err) {
+		writeErrorResponse(conn, err.Error())
+		return
+	}
+
+	aboutClient, err := ParseClientAboutMe(*operation.Message)
+	if common.CheckErrorAndLog(err) {
+		writeErrorResponse(conn, err.Error())
+		return
+	}
+
+	err = sendAboutMeResponse(conn, aboutClient)
 	if common.CheckErrorAndLog(err) {
 		writeErrorResponse(conn, err.Error())
 		return
@@ -75,14 +86,15 @@ func handleConnection(conn net.Conn) {
 	}()
 
 	for {
-		nBytes, err := bufio.NewReader(conn).Read(buf)
-
+		request, err := common.ReadUntil(connReader, common.EOFBytes)
 		if err == io.EOF {
 			log.Printf("connection closed. exiting function\n")
 			break
+		} else {
+			common.CheckErrorAndLog(err)
 		}
 
-		operation, err := getOperation(buf[:nBytes])
+		operation, err := getOperation(request)
 		if common.CheckErrorAndLog(err) {
 			writeErrorResponse(conn, err.Error())
 			break
@@ -124,7 +136,7 @@ func subscribeToMessages(conn net.Conn, conversationsToListenOn map[uuid.UUID]bo
 		case <-quit:
 			return
 		case message := <-messagesChannel:
-			if conversationsToListenOn[message.ConversationID] {
+			if conversationsToListenOn[message.Conversation.ID] {
 				responseBytes, err := json.Marshal(message)
 				if err != nil {
 					log.Printf("error while marshaling message: %s\n", err.Error())
@@ -134,10 +146,24 @@ func subscribeToMessages(conn net.Conn, conversationsToListenOn map[uuid.UUID]bo
 				}
 
 				responseJSON := json.RawMessage(responseBytes)
-				writeOKResponse(conn, &responseJSON)
+				writeOKResponse(conn, &responseJSON, common.MessageOperationType)
 			}
 		}
 	}
+}
+
+func sendAboutMeResponse(conn net.Conn, aboutClient *common.ClientAboutMe) error {
+	b, err := json.Marshal(aboutClient)
+	if err != nil {
+		log.Printf("Error: %s\n", err.Error())
+		return err
+	}
+
+	jsonAboutClient := json.RawMessage(b)
+
+	writeOKResponse(conn, &jsonAboutClient, common.AboutMeOperationType)
+
+	return nil
 }
 
 func handleCreateConversation(op *common.Operation) error {
@@ -212,7 +238,7 @@ func handleMessage(op *common.Operation) (*json.RawMessage, error) {
 		return &message, errors.New(unmarshalingError)
 	}
 
-	log.Printf("Got message: %s\n", convMessage)
+	log.Printf("Got message: %s\n", string(*op.Message))
 
 	messagesChannel <- convMessage
 
@@ -221,7 +247,9 @@ func handleMessage(op *common.Operation) (*json.RawMessage, error) {
 
 // ParseClientAboutMe parses the data first sent by Client to introduce themselves
 func ParseClientAboutMe(b []byte) (*common.ClientAboutMe, error) {
-	aboutClient := &common.ClientAboutMe{}
+	aboutClient := &common.ClientAboutMe{ID: uuid.New()}
+
+	log.Printf("got about me: %s\n", string(b))
 
 	err := json.Unmarshal(b, aboutClient)
 	if err != nil {
