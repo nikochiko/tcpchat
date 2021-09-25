@@ -15,6 +15,8 @@ import (
 	"github.com/nikochiko/tcpchat/common"
 )
 
+var globalConversations = []*common.Conversation{}
+
 func Connect(service string) {
 	raddr, err := net.ResolveTCPAddr("tcp4", service)
 	common.CheckError(err)
@@ -29,7 +31,7 @@ func Connect(service string) {
 
 	for {
 		select {
-		case <- quitConn:
+		case <-quitConn:
 			conn.Close()
 			log.Printf("Connection with %s closed\n", conn.RemoteAddr().String())
 			return
@@ -38,6 +40,8 @@ func Connect(service string) {
 }
 
 func handleConnection(conn net.Conn, quitConn chan bool) {
+	var err error
+
 	defer func() {
 		quitConn <- true
 	}()
@@ -53,7 +57,9 @@ func handleConnection(conn net.Conn, quitConn chan bool) {
 		quit <- true
 	}()
 
-	var err error
+	err = listConversations(conn)
+	common.CheckError(err)
+
 	for {
 		switch operationType := getOperationType(); strings.ToLower(operationType) {
 		case common.CreateOperationType:
@@ -68,6 +74,8 @@ func handleConnection(conn net.Conn, quitConn chan bool) {
 			var convNickname string
 			fmt.Scanf("%s", &convNickname)
 			err = sendMessage(conn, convNickname)
+		case common.ListOperationType:
+			err = listConversations(conn)
 		}
 
 		if err != nil {
@@ -97,16 +105,55 @@ func handleIncoming(conn net.Conn, quit chan bool) {
 			}
 
 			if response.Status == "ok" {
-				fmt.Printf("Received OK response: %s\n", string(*response.Message))
+				log.Printf("Received OK response: %s\n", string(*response.Message))
 			} else if response.Status == "error" {
 				err := fmt.Sprintf("got error response from server: %s", response.Error.Message)
 				common.CheckErrorAndLog(errors.New(err))
 			}
+
+			handleResponse(response)
 		}
 	}
 }
 
-func listConversations(conn net.Conn) {
+func handleResponse(response common.Response) {
+	switch response.OperationType {
+	case common.ListOperationType:
+		handleListOperationResponse(response.Message)
+	case common.MessageOperationType:
+		handleMessageOperationResponse(response.Message)
+		// ignore in all other cases
+	}
+}
+
+func handleListOperationResponse(jsonConversations *json.RawMessage) {
+	err := json.Unmarshal(*jsonConversations, &globalConversations)
+	common.CheckError(err)
+}
+
+func handleMessageOperationResponse(jsonMessage *json.RawMessage) {
+	message := common.Message{}
+
+	err := json.Unmarshal(*jsonMessage, &message)
+	common.CheckError(err)
+
+	fmt.Printf("\n<@%s>: %s\n", message.Sender.Name, message.Text)
+}
+
+func listConversations(conn net.Conn) error {
+	emptyJSON := json.RawMessage("{}")
+
+	operation := common.Operation{
+		Type:    common.ListOperationType,
+		Message: &emptyJSON,
+	}
+
+	err := writeJSONTo(conn, operation)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func createConversation(conn net.Conn, nickname string) error {
@@ -142,7 +189,7 @@ func subscribe(conn net.Conn, convNickname string) error {
 	conversationJSON := json.RawMessage(marshaled)
 
 	operation := common.Operation{
-		Type: common.SubscribeOperationType,
+		Type:    common.SubscribeOperationType,
 		Message: &conversationJSON,
 	}
 
@@ -155,6 +202,19 @@ func subscribe(conn net.Conn, convNickname string) error {
 }
 
 func sendMessage(conn net.Conn, convNickname string) error {
+	var text string
+	_, err := fmt.Scanf("%s\r", &text)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(text)
+	// message := common.Message{
+	// 	ConversationNickname: convNickname,
+	// 	SenderName:           senderName,
+	// 	Text:                 text,
+	// }
+
 	return nil
 }
 

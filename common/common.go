@@ -11,15 +11,16 @@ const (
 	CreateOperationType    = "create"
 	SubscribeOperationType = "subscribe"
 	MessageOperationType   = "message"
+	ListOperationType      = "list"
 )
 
 var EOFBytes = []byte("\r\n")
 
 // Message type describes a message being transferred between a client and a server
 type Message struct {
-	ConversationID uuid.UUID
-	SenderID       uuid.UUID
-	Text           string
+	Conversation Conversation `json:"conversation"`
+	Sender       Sender       `json:"sender"`
+	Text         string       `json:"text"`
 }
 
 // Sender type describes a sender of a message
@@ -49,9 +50,10 @@ type Operation struct {
 }
 
 type Response struct {
-	Status  string           `json:"status"`
-	Error   *Error           `json:"error"`
-	Message *json.RawMessage `json:"message"`
+	Status        string           `json:"status"`
+	OperationType string           `json:"operation_type"`
+	Error         *Error           `json:"error"`
+	Message       *json.RawMessage `json:"message"`
 }
 
 func NewOperation() Operation {

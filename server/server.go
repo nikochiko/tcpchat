@@ -98,6 +98,8 @@ func handleConnection(conn net.Conn) {
 			err = handleSubscribe(operation, conversationsToListenOn)
 		case common.MessageOperationType:
 			response, err = handleMessage(operation)
+		case common.ListOperationType:
+			response, err = handleListConversations(operation)
 		}
 
 		if err != nil {
@@ -105,7 +107,7 @@ func handleConnection(conn net.Conn) {
 			break
 		}
 
-		err = writeOKResponse(conn, response)
+		err = writeOKResponse(conn, response, operation.Type)
 
 		if err != nil {
 			writeErrorResponse(conn, err.Error())
@@ -163,6 +165,19 @@ func handleCreateConversation(op *common.Operation) error {
 	conversationsByNickname[conversation.Nickname] = conversation
 
 	return nil
+}
+
+func handleListConversations(op *common.Operation) (*json.RawMessage, error) {
+	emptyJSON := json.RawMessage("{}")
+
+	conversationsJSON, err := json.Marshal(conversations)
+	if err != nil {
+		return &emptyJSON, err
+	}
+
+	responseMessage := json.RawMessage(conversationsJSON)
+
+	return &responseMessage, err
 }
 
 func handleSubscribe(op *common.Operation, conversationsToListenOn map[uuid.UUID]bool) error {
@@ -247,9 +262,14 @@ func writeErrorResponse(conn net.Conn, s string) {
 	conn.Close()
 }
 
-func writeOKResponse(conn net.Conn, message *json.RawMessage) error {
+func writeOKResponse(conn net.Conn, message *json.RawMessage, operationType string) error {
 	response := common.NewResponse()
 	response.Status = "ok"
+
+	if operationType != "" {
+		response.OperationType = operationType
+	}
+
 	if !bytes.Equal(*message, []byte{}) {
 		response.Message = message
 	}
