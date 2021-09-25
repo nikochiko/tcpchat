@@ -29,7 +29,8 @@ type Sender struct {
 
 // Conversation type is where senders can send and viewers can view the messages
 type Conversation struct {
-	ID uuid.UUID `json:"id"`
+	ID       uuid.UUID `json:"id"`
+	Nickname string    `json:"nickname"`
 }
 
 // Error type is used to send errors

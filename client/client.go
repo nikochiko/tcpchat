@@ -41,11 +41,13 @@ func handleConnection(conn net.Conn) {
 	for {
 		switch operationType := getOperationType(); strings.ToLower(operationType) {
 		case common.CreateOperationType:
-			err = createConversation(conn)
+			var name string
+			fmt.Scanf("%s", &name)
+			err = createConversation(conn, name)
 		}
 
 		if err != nil {
-			fmt.Printf("Error:\n%s\n", err.Error())
+			fmt.Printf("Error: %s\n", err.Error())
 			break
 		}
 	}
@@ -77,14 +79,21 @@ func getOperationType() (operationType string) {
 func listConversations(conn net.Conn) {
 }
 
-func createConversation(conn net.Conn) error {
-	emptyJSON := json.RawMessage("{}")
-	operation := common.Operation{
-		Type:    common.CreateOperationType,
-		Message: &emptyJSON,
+func createConversation(conn net.Conn, nickname string) error {
+	newConversation := common.Conversation{Nickname: nickname}
+	marshaled, err := json.Marshal(newConversation)
+	if err != nil {
+		return err
 	}
 
-	err := writeJSONTo(conn, operation)
+	conversationJSON := json.RawMessage(marshaled)
+
+	operation := common.Operation{
+		Type:    common.CreateOperationType,
+		Message: &conversationJSON,
+	}
+
+	err = writeJSONTo(conn, operation)
 	if err != nil {
 		return err
 	}
@@ -98,7 +107,6 @@ func createConversation(conn net.Conn) error {
 	if response.Status == "ok" {
 		fmt.Printf("Received OK response: %s\n", string(*response.Message))
 	} else if response.Status == "error" {
-		fmt.Printf("Got error response. Error: %s\n", response.Error.Message)
 		err := fmt.Sprintf("got error response from server: %s", response.Error.Message)
 		return errors.New(err)
 	}

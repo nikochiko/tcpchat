@@ -9,20 +9,19 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/nikochiko/tcpchat/common"
 )
 
 const (
-	UnmarshalingError        = "Error while unmarshaling data. Please check again"
-	NewMessageHeader         = "message"
-	SubscribeHeader          = "subscribe"
-	ListConveresationsHeader = "list"
-	NewConversationHeader    = "new"
+	unmarshalingError = "Error while unmarshaling data. Please check again"
 )
 
 var conversationIDs = map[uuid.UUID]bool{}
+var conversations = []*common.Conversation{}
+var conversationsByNickname = map[string]*common.Conversation{}
 
 // Listen starts listening on the given service ("host:port") for TCP connections
 func Listen(service string) error {
@@ -65,7 +64,7 @@ func handleConnection(conn net.Conn) {
 
 	log.Printf("New connection received from client: %v\n", aboutClient)
 
-	// conversationsToListenOn := map[uuid.UUID]bool{}
+	conversationsToListenOn := map[uuid.UUID]bool{}
 
 	for {
 		nBytes, err := bufio.NewReader(conn).Read(buf)
@@ -86,14 +85,20 @@ func handleConnection(conn net.Conn) {
 		switch operation.Type {
 		case common.CreateOperationType:
 			response, err = handleCreateConversation(operation)
-			// case common.SubscribeOperationType:
-			// 	response, err = handleSubscribeToConversation(operation)
+		case common.SubscribeOperationType:
+			response, err = handleSubscribe(operation, conversationsToListenOn)
+		}
+
+		if err != nil {
+			writeErrorResponse(conn, err.Error())
+			break
 		}
 
 		err = writeOKResponse(conn, response)
+
 		if err != nil {
 			writeErrorResponse(conn, err.Error())
-			return
+			break
 		}
 	}
 
@@ -102,15 +107,28 @@ func handleConnection(conn net.Conn) {
 
 func handleCreateConversation(op *common.Operation) (*json.RawMessage, error) {
 	message := json.RawMessage("{}")
-	conversation := &common.Conversation{ID: uuid.New()}
+	conversation := &common.Conversation{}
 
 	err := json.Unmarshal(*op.Message, conversation)
 	if err != nil {
 		log.Printf("Unmarshaling error while parsing Conversation: %s\n", err.Error())
-		return &message, errors.New(UnmarshalingError)
+		return &message, errors.New(unmarshalingError)
 	}
 
+	conversation.ID = uuid.New()
+
+	if conversation.Nickname == "" {
+		conversation.Nickname = strconv.Itoa(len(conversations))
+	}
+
+	if _, ok := conversationsByNickname[conversation.Nickname]; ok {
+		err := fmt.Sprintf("conversation with nickname '%s' already exists", conversation.Nickname)
+		return &message, errors.New(err)
+	}
+
+	conversations = append(conversations, conversation)
 	conversationIDs[conversation.ID] = true
+	conversationsByNickname[conversation.Nickname] = conversation
 
 	b, err := json.Marshal(conversation)
 	if err != nil {
@@ -123,6 +141,31 @@ func handleCreateConversation(op *common.Operation) (*json.RawMessage, error) {
 	return &message, nil
 }
 
+func handleSubscribe(op *common.Operation, conversationsToListenOn map[uuid.UUID]bool) (*json.RawMessage, error) {
+	message := json.RawMessage("{}")
+	inputConversation := &common.Conversation{}
+
+	err := json.Unmarshal(*op.Message, inputConversation)
+	if err != nil {
+		log.Printf("Unmarshaling error while parsing Conversation: %s\n", err.Error())
+		return &message, errors.New(unmarshalingError)
+	}
+
+	nickname := inputConversation.Nickname
+	conversation, ok := conversationsByNickname[nickname]
+	if !ok {
+		err := fmt.Sprintf("conversation '%s' does not exist", nickname)
+		return &message, errors.New(err)
+	}
+
+	convID := conversation.ID
+	conversationsToListenOn[convID] = true
+
+	message = json.RawMessage(fmt.Sprintf("listening on conversation '%s'", nickname))
+
+	return &message, nil
+}
+
 // ParseClientAboutMe parses the data first sent by Client to introduce themselves
 func ParseClientAboutMe(b []byte) (*common.ClientAboutMe, error) {
 	aboutClient := &common.ClientAboutMe{}
@@ -130,7 +173,7 @@ func ParseClientAboutMe(b []byte) (*common.ClientAboutMe, error) {
 	err := json.Unmarshal(b, aboutClient)
 	if err != nil {
 		log.Printf("Unmarshaling error while parsing ClientAboutMe: %s\n", err.Error())
-		return aboutClient, errors.New(UnmarshalingError)
+		return aboutClient, errors.New(unmarshalingError)
 	}
 
 	return aboutClient, nil
@@ -142,7 +185,7 @@ func getOperation(b []byte) (*common.Operation, error) {
 	err := json.Unmarshal(b, operation)
 	if err != nil {
 		log.Printf("Unmarshaling error while parsing Operation: %s\n", err.Error())
-		return operation, errors.New(UnmarshalingError)
+		return operation, errors.New(unmarshalingError)
 	}
 
 	return operation, nil
@@ -182,8 +225,10 @@ func writeOKResponse(conn net.Conn, message *json.RawMessage) error {
 		return err
 	}
 
-	conn.Write(responseBytes)
-	conn.Write(common.EOFBytes)
+	_, err = conn.Write(append(responseBytes, common.EOFBytes...))
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
